@@ -1,0 +1,108 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>FUSION POINT offline render</title>
+<!-- Dev tool: renders sections through an OfflineAudioContext so levels can
+     be measured without speakers. Driven by tools/render-audio.mjs. -->
+<script src="../js/core/util.js"></script>
+<script src="../js/theory/tempo.js"></script>
+<script src="../js/audio/engine.js"></script>
+<script src="../js/audio/kicktrain.js"></script>
+<script src="../js/audio/synths.js"></script>
+<script src="../js/music/kit.js"></script>
+<script src="../js/music/sections/01-gabber.js"></script>
+<script src="../js/music/sections/02-accelerando.js"></script>
+<script src="../js/music/sections/03-fusion.js"></script>
+<script src="../js/music/sections/04-harmonics.js"></script>
+<script src="../js/music/sections/05-rhythmicon.js"></script>
+<script src="../js/music/sections/06-risset.js"></script>
+<script src="../js/music/sections/07-kontakte.js"></script>
+<script src="../js/music/sections/08-overflow.js"></script>
+<script src="../js/music/conductor.js"></script>
+<script>
+  'use strict';
+  const SECS = FP.SECTIONS.slice().sort((a, b) => a.order - b.order);
+
+  const sectionDuration = (sec) => FP.Conductor.duration(sec);
+
+  function wav(buf) {
+    const ch = buf.numberOfChannels, len = buf.length, sr = buf.sampleRate;
+    const out = new DataView(new ArrayBuffer(44 + len * ch * 2));
+    const w = (o, s) => { for (let i = 0; i < s.length; i++) out.setUint8(o + i, s.charCodeAt(i)); };
+    w(0, 'RIFF'); out.setUint32(4, 36 + len * ch * 2, true); w(8, 'WAVE'); w(12, 'fmt ');
+    out.setUint32(16, 16, true); out.setUint16(20, 1, true); out.setUint16(22, ch, true);
+    out.setUint32(24, sr, true); out.setUint32(28, sr * ch * 2, true); out.setUint16(32, ch * 2, true);
+    out.setUint16(34, 16, true); w(36, 'data'); out.setUint32(40, len * ch * 2, true);
+    const data = [];
+    for (let c = 0; c < ch; c++) data.push(buf.getChannelData(c));
+    let o = 44;
+    for (let i = 0; i < len; i++) for (let c = 0; c < ch; c++) {
+      const v = Math.max(-1, Math.min(1, data[c][i]));
+      out.setInt16(o, v < 0 ? v * 32768 : v * 32767, true); o += 2;
+    }
+    const bytes = new Uint8Array(out.buffer);
+    let bin = '';
+    for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+    return btoa(bin);
+  }
+
+  // Render sections [from, to) back to back (or one section) and measure.
+  window.render = async function (from, to, seed, withWav, lite, mute) {
+    const sr = 44100;
+    let seconds = 0.3;
+    for (let i = from; i < to; i++) seconds += sectionDuration(SECS[i]);
+    seconds += 1.5;
+    const ctx = new OfflineAudioContext(2, Math.ceil(sr * seconds), sr);
+    const E = new FP.Engine(ctx, { volume: 1, lite: !!lite });
+    const tt0 = performance.now();
+    for (const bus of mute || []) E[bus].gain.value = 0; // debugging: solo by muting
+    const counts = {};
+    const errors = [];
+    const cond = new FP.Conductor(E, SECS, {
+      seed, onEvent: (ev) => { counts[ev.type] = (counts[ev.type] || 0) + 1; },
+    });
+    const chunk = 0.25;
+    try {
+      cond.start(from, 0.1);
+      cond.scheduleUntil(chunk + 0.3);
+    } catch (e) { errors.push(String(e && e.stack || e)); }
+    const stopAt = 0.1 + seconds - 1.5;
+    for (let t = chunk; t < seconds - 0.1; t += chunk) {
+      const tt = t;
+      ctx.suspend(tt).then(() => {
+        try {
+          if (tt < stopAt) cond.scheduleUntil(Math.min(tt + chunk + 0.3, stopAt));
+          else cond.running = false;
+        } catch (e) { errors.push(String(e && e.stack || e)); cond.running = false; }
+        ctx.resume();
+      });
+    }
+    const buf = await ctx.startRendering();
+    const wall = (performance.now() - tt0) / 1000;
+    const L = buf.getChannelData(0), R = buf.getChannelData(1);
+    let peak = 0, sum = 0, nan = 0, hot = 0;
+    const perSec = [];
+    let secSum = 0, secPeak = 0;
+    for (let i = 0; i < L.length; i++) {
+      const a = L[i], b = R[i];
+      if (!Number.isFinite(a) || !Number.isFinite(b)) { nan++; continue; }
+      const m = Math.max(Math.abs(a), Math.abs(b));
+      if (m > peak) peak = m;
+      if (m > 0.98) hot++;
+      sum += a * a + b * b;
+      secSum += a * a + b * b;
+      if (m > secPeak) secPeak = m;
+      if ((i + 1) % sr === 0) {
+        perSec.push([+(10 * Math.log10(secSum / (2 * sr) + 1e-12)).toFixed(1), +secPeak.toFixed(3)]);
+        secSum = 0; secPeak = 0;
+      }
+    }
+    return {
+      from, to, seconds: +seconds.toFixed(2),
+      peak: +peak.toFixed(4), rmsDb: +(10 * Math.log10(sum / (2 * L.length) + 1e-12)).toFixed(2),
+      nan, hot, perSec, counts, errors, wall: +wall.toFixed(2),
+      wav: withWav ? wav(buf) : null,
+    };
+  };
+  window.durations = () => SECS.map((s) => ({ id: s.id, seconds: +sectionDuration(s).toFixed(2) }));
+  window.READY = true;
+</script>
