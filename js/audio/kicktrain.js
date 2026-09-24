@@ -184,6 +184,10 @@
       if (this.cursor < 0) this.cursor = segs.length ? Math.min(segs[0].s0, end) : end;
       const now = this.E.ctx.currentTime;
       if (this.sources.length > 64) this.sources = this.sources.filter((s) => s.endAt > now);
+      // If the main thread stalled past our render head, skip the lost time
+      // rather than queueing audio in the past (which would play late, piled up).
+      const nowS = Math.ceil(now * this.sr);
+      if (this.cursor >= 0 && this.cursor < nowS) this.cursor = nowS;
       while (this.cursor < end) {
         while (segs.length && segs[0].s1 <= this.cursor) segs.shift();
         const first = segs[0];

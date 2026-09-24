@@ -16,7 +16,7 @@
       this.emit = opts.onEvent || (() => {});
       this.seed = (opts.seed != null ? opts.seed : Math.floor(Math.random() * 4294967296)) >>> 0;
       this.cycle = 0;
-      this.lookahead = opts.lookahead || 0.15;
+      this.lookahead = opts.lookahead || 0.2;
       this.running = false;
       this.lanes = new Map();
       if (!engine.kickTables) engine.kickTables = K.makeTables(engine.ctx.sampleRate);

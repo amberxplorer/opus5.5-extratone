@@ -1,5 +1,4 @@
-# FUSION POINT
-### where rhythm turns into pitch
+# FUSION POINT — where rhythm turns into pitch
 
 ## [▶ Play the live demo](https://amberxplorer.github.io/opus5.5-extratone/)
 
